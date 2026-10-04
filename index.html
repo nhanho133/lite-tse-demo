@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LiteTSE — demo kết quả thật</title>
+<meta name="description" content="4 case tách giọng mục tiêu thật (mixture → LiteTSE → groundtruth), kèm WER đo bằng whisper tiny.en." />
+<style>
+  :root {
+    --bg: #0b0d12;
+    --panel: #151822;
+    --panel-2: #1b1f2c;
+    --border: #2a2f3d;
+    --text: #e8eaf0;
+    --muted: #9aa3b5;
+    --accent: #6ea8ff;
+    --good: #5fd98a;
+    --bad: #ff8a8a;
+    --mono: "SF Mono", "Consolas", "Menlo", monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f7fb;
+      --panel: #ffffff;
+      --panel-2: #f0f2f8;
+      --border: #e1e4ee;
+      --text: #1b1f2c;
+      --muted: #5b6475;
+      --accent: #2a63d6;
+      --good: #1f8f52;
+      --bad: #c23b3b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.55;
+    padding: 0 16px 64px;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  header { padding: 48px 0 24px; }
+  h1 { font-size: 1.6rem; margin: 0 0 8px; }
+  .sub { color: var(--muted); font-size: 0.95rem; max-width: 640px; }
+  .badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-family: var(--mono);
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    margin-right: 6px;
+  }
+  .summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 12px;
+    margin: 24px 0 40px;
+  }
+  .stat {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px;
+  }
+  .stat .label { color: var(--muted); font-size: 0.78rem; }
+  .stat .value { font-size: 1.4rem; font-weight: 600; margin-top: 2px; }
+  .stat .value.good { color: var(--good); }
+  .stat .value.bad { color: var(--bad); }
+
+  .case {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    margin-bottom: 28px;
+  }
+  .case h2 {
+    font-size: 1.05rem;
+    margin: 0 0 4px;
+  }
+  .case .meta {
+    color: var(--muted);
+    font-size: 0.8rem;
+    font-family: var(--mono);
+    margin-bottom: 18px;
+  }
+  .track {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+  }
+  .track-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+  }
+  .track-name { font-size: 0.82rem; font-weight: 600; }
+  .track-name .tag {
+    font-size: 0.68rem;
+    font-weight: 500;
+    color: var(--muted);
+    margin-left: 6px;
+  }
+  .wer {
+    font-family: var(--mono);
+    font-size: 0.78rem;
+  }
+  .wer.good { color: var(--good); }
+  .wer.bad { color: var(--bad); }
+  audio { width: 100%; display: block; }
+  .transcript {
+    font-size: 0.82rem;
+    color: var(--muted);
+    margin-top: 8px;
+    font-style: italic;
+  }
+  .transcript b { color: var(--text); font-style: normal; font-weight: 500; }
+
+  footer {
+    color: var(--muted);
+    font-size: 0.78rem;
+    margin-top: 48px;
+    border-top: 1px solid var(--border);
+    padding-top: 20px;
+  }
+  footer a { color: var(--accent); }
+  .note {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    font-size: 0.85rem;
+    color: var(--muted);
+    margin-bottom: 32px;
+  }
+  .note b { color: var(--text); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="badge">CPU-only</span>
+    <span class="badge">streaming</span>
+    <span class="badge">causal TF-GridNet, 4.67M params</span>
+    <h1>LiteTSE — demo kết quả thật</h1>
+    <p class="sub">
+      4 case tách giọng người nói mục tiêu khỏi audio nhiễu (target speaker extraction),
+      chạy thật trên CPU-only, dữ liệu audio và số liệu dưới đây là kết quả đo được, không mô phỏng.
+    </p>
+  </header>
+
+  <div class="summary">
+    <div class="stat">
+      <div class="label">WER mixture (không TSE)</div>
+      <div class="value bad">74.36%</div>
+    </div>
+    <div class="stat">
+      <div class="label">WER sau LiteTSE</div>
+      <div class="value good">35.90%</div>
+    </div>
+    <div class="stat">
+      <div class="label">RTF (8 thread, CPU-only)</div>
+      <div class="value">0.147</div>
+    </div>
+    <div class="stat">
+      <div class="label">Memory leak / 300 vòng</div>
+      <div class="value good">không có</div>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>Cách đo WER:</b> không có transcript gốc đi kèm 4 case này, nên <code>2_target_groundtruth.wav</code>
+    (giọng mục tiêu sạch, chưa trộn nhiễu, chưa qua TSE) được đưa qua whisper <code>tiny.en</code> để lấy
+    transcript dùng làm tham chiếu. WER mixture/TSE là so với transcript đó — một proxy hợp lý để xem
+    TSE cải thiện bao nhiêu so với mixture thô, không phải một con số WER chuẩn tuyệt đối.
+    Chi tiết: <a href="https://github.com/nhanho133/lite-tse-demo" style="color:inherit">README của repo này</a>.
+  </div>
+
+  <div id="cases"></div>
+
+  <footer>
+    Model: causal TF-GridNet rút gọn (sliding-window attention, LSTM nhân quả) — input 16kHz mono +
+    speaker embedding 256 chiều (Resemblyzer d-vector), output 16kHz mono chỉ chứa giọng mục tiêu.
+    Đo trên Libri2Mix test <code>mix_both</code> (6000 câu, nhiễu WHAM): SI-SDRi +8.86 dB, PESQ 1.45,
+    STOI 0.80. Mã nguồn & dữ liệu test đầy đủ trong repo này.
+  </footer>
+</div>
+
+<script>
+const CASES = [
+  {
+    id: "case1",
+    title: "Case 1 — core0",
+    meta: "237-134500-0000 (target) × 7021-79740-0002 (interferer), s1, core0",
+    tracks: [
+      { file: "mixture.wav", name: "1. Mixture (nhiễu, chưa xử lý)", wer: 105.88, werClass: "bad",
+        text: "Now, give them this, to try to do a teetrap in force. And it's amazing. Over the mind." },
+      { file: "tse.wav", name: "2. LiteTSE output", wer: 47.06, werClass: "good",
+        text: "Right, writing the stokes and the more he read about this the more he is." },
+      { file: "groundtruth.wav", name: "3. Groundtruth (giọng mục tiêu sạch)", wer: null,
+        text: "Frank read English Stoli and the more he read about this divorce case, the angrier he grew." }
+    ]
+  },
+  {
+    id: "case2",
+    title: "Case 2 — core0",
+    meta: "7176-88083-0010 (target) × 121-127105-0022 (interferer), s1, core0",
+    tracks: [
+      { file: "mixture.wav", name: "1. Mixture (nhiễu, chưa xử lý)", wer: 18.75, werClass: "bad",
+        text: "The cat growled song. She picked up the prize in her jolly and trotted into the bushes." },
+      { file: "tse.wav", name: "2. LiteTSE output", wer: 12.50, werClass: "good",
+        text: "The cat growled softly, fixed up the prize in her jollos and trotted into the bushes." },
+      { file: "groundtruth.wav", name: "3. Groundtruth (giọng mục tiêu sạch)", wer: null,
+        text: "The cat growled softly, picked up the prize in her jaws and trotted into the bushes." }
+    ]
+  },
+  {
+    id: "case3",
+    title: "Case 3 — core0",
+    meta: "7729-102255-0042 (target) × 121-121726-0005 (interferer), s2, core0",
+    tracks: [
+      { file: "mixture.wav", name: "1. Mixture (nhiễu, chưa xử lý)", wer: 133.33, werClass: "bad",
+        text: "relocated footnote governor robin" },
+      { file: "tse.wav", name: "2. LiteTSE output", wer: 66.67, werClass: "good",
+        text: "Hey up fence" },
+      { file: "whyv.wav", name: "4. WHYV output (baseline khác)", wer: 66.67, werClass: "good",
+        text: "Hedge of that." },
+      { file: "groundtruth.wav", name: "3. Groundtruth (giọng mục tiêu sạch)", wer: null,
+        text: "Hedge...A fence." }
+    ]
+  },
+  {
+    id: "case4",
+    title: "Case 4 — core20",
+    meta: "7729-102255-0042 (target) × 121-121726-0005 (interferer), s2, core20",
+    tracks: [
+      { file: "mixture.wav", name: "1. Mixture (nhiễu, chưa xử lý)", wer: 133.33, werClass: "bad",
+        text: "relocated footnote governor robin" },
+      { file: "tse.wav", name: "2. LiteTSE output", wer: 66.67, werClass: "good",
+        text: "Hey up fence" },
+      { file: "groundtruth.wav", name: "3. Groundtruth (giọng mục tiêu sạch)", wer: null,
+        text: "Hedge...A fence." }
+    ]
+  }
+];
+
+const root = document.getElementById("cases");
+for (const c of CASES) {
+  const section = document.createElement("section");
+  section.className = "case";
+
+  const h2 = document.createElement("h2");
+  h2.textContent = c.title;
+  section.appendChild(h2);
+
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = c.meta;
+  section.appendChild(meta);
+
+  for (const t of c.tracks) {
+    const track = document.createElement("div");
+    track.className = "track";
+
+    const head = document.createElement("div");
+    head.className = "track-head";
+
+    const name = document.createElement("div");
+    name.className = "track-name";
+    name.textContent = t.name;
+    head.appendChild(name);
+
+    if (t.wer !== null) {
+      const wer = document.createElement("div");
+      wer.className = "wer " + t.werClass;
+      wer.textContent = "WER " + t.wer.toFixed(2) + "%";
+      head.appendChild(wer);
+    }
+
+    track.appendChild(head);
+
+    const audio = document.createElement("audio");
+    audio.controls = true;
+    audio.preload = "none";
+    audio.src = "audio/" + c.id + "/" + t.file;
+    track.appendChild(audio);
+
+    const transcript = document.createElement("div");
+    transcript.className = "transcript";
+    transcript.innerHTML = '<b>whisper tiny.en:</b> "' + t.text + '"';
+    track.appendChild(transcript);
+
+    section.appendChild(track);
+  }
+
+  root.appendChild(section);
+}
+</script>
+</body>
+</html>
