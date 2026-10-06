@@ -463,7 +463,16 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
     const audioEl = document.getElementById("extractAudio");
     audioEl.src = url;
     audioEl.style.display = "block";
-    setStatus(extractStatus, `xong — ${(trimmed.length / SR).toFixed(2)}s${truncatedNote}`, "good");
+
+    let peak = 0;
+    for (let i = 0; i < trimmed.length; i++) peak = Math.max(peak, Math.abs(trimmed[i]));
+    const quiet = peak < 0.02;
+    const peakNote = quiet
+      ? ` — ⚠️ peak=${peak.toFixed(4)} (rất nhỏ: model gần như không thấy giọng mục tiêu trong` +
+        ` đoạn này — kiểm tra lại bạn CÓ NÓI trong lúc ghi mixture không, bằng đúng giọng Reference)`
+      : ` — peak=${peak.toFixed(3)}`;
+    setStatus(extractStatus, `xong — ${(trimmed.length / SR).toFixed(2)}s${truncatedNote}${peakNote}`,
+      quiet ? "warn" : "good");
   } catch (err) {
     setStatus(extractStatus, "lỗi: " + err.message, "bad");
   }
