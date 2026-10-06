@@ -154,14 +154,23 @@ function setStatus(el, text, cls) {
 
 async function loadModels() {
   setStatus(refStatus, "đang tải model (~27MB)...", "warn");
-  ort.env.wasm.numThreads = Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1));
+  // GitHub Pages does not send the COOP/COEP headers SharedArrayBuffer needs, so the
+  // multi-threaded WASM build silently hangs/fails here -- force single-thread, and point
+  // explicitly at the CDN's own dist folder instead of letting ORT guess the wasm path.
+  ort.env.wasm.numThreads = 1;
+  ort.env.wasm.wasmPaths = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/";
   const opts = { executionProviders: ["wasm"] };
-  [ortSessionTse, ortSessionEmb] = await Promise.all([
-    ort.InferenceSession.create("onnx/lite_tfgridnet.onnx", opts),
-    ort.InferenceSession.create("onnx/embedding.onnx", opts),
-  ]);
+  try {
+    [ortSessionTse, ortSessionEmb] = await Promise.all([
+      ort.InferenceSession.create("onnx/lite_tfgridnet.onnx", opts),
+      ort.InferenceSession.create("onnx/embedding.onnx", opts),
+    ]);
+  } catch (err) {
+    setStatus(refStatus, "lỗi tải model: " + err.message, "bad");
+    console.error(err);
+    return;
+  }
   setStatus(refStatus, "model đã sẵn sàng — chưa có reference", "");
-  document.getElementById("mixStartBtn").disabled = false; // enabled once enrolled, see below
 }
 
 // ---------- audio helpers ----------
@@ -368,7 +377,14 @@ document.getElementById("mixStartBtn").addEventListener("click", async () => {
       mixRecordedChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
     };
     source.connect(processor);
-    processor.connect(mixAudioCtx.destination); // Safari requires a connected graph to pull data
+    // Safari requires the processor to reach destination to pull data at all, but connecting
+    // it directly would play the live mic back out of the speakers -- an easy feedback howl
+    // without headphones. A zero-gain node keeps the graph "connected" without being audible.
+    const silentGain = mixAudioCtx.createGain();
+    silentGain.gain.value = 0;
+    processor.connect(silentGain);
+    silentGain.connect(mixAudioCtx.destination);
+    mixAudioCtx._silentGain = silentGain;
 
     mixAudioCtx._stream = stream;
     mixAudioCtx._processor = processor;
@@ -401,6 +417,7 @@ document.getElementById("mixStopBtn").addEventListener("click", () => {
   if (mixPreviewTimer) clearInterval(mixPreviewTimer);
   if (mixAudioCtx) {
     mixAudioCtx._processor.disconnect();
+    mixAudioCtx._silentGain.disconnect();
     mixAudioCtx._source.disconnect();
     mixAudioCtx._stream.getTracks().forEach((t) => t.stop());
     mixAudioCtx.close();
