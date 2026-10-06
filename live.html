@@ -130,6 +130,8 @@
     Model: LiteTFGridNet (causal TF-GridNet, 4.67M tham số) + Resemblyzer speaker encoder,
     cả hai export sang ONNX và verify khớp bản PyTorch gốc (sai số ~1e-7, cosine similarity
     1.000 với embedding Resemblyzer thật). Mã nguồn & số liệu đầy đủ trong repo này.
+    <br /><span style="opacity:0.6">build: 2026-10-06-peak-diagnostics — nếu không thấy dòng
+    "peak=" ở kết quả Trích xuất, bấm Ctrl/Cmd+Shift+R để xoá cache rồi tải lại.</span>
   </footer>
 </div>
 
@@ -437,8 +439,18 @@ document.getElementById("mixStopBtn").addEventListener("click", () => {
   document.getElementById("mixStartBtn").disabled = false;
   document.getElementById("mixStopBtn").disabled = true;
   document.getElementById("extractBtn").disabled = false;
-  const recordedSec = (getAccumulatedFloat32().length / mixNativeRate).toFixed(2);
-  setStatus(mixStatus, `đã ghi ${recordedSec}s — bấm Trích xuất để lấy kết quả cuối`, "good");
+  const acc = getAccumulatedFloat32();
+  const recordedSec = (acc.length / mixNativeRate).toFixed(2);
+  // Peak of the RAW mic capture, before anything touches the model -- separates "mic didn't
+  // actually capture speech" from "model suppressed it", which were getting conflated.
+  let rawPeak = 0;
+  for (let i = 0; i < acc.length; i++) rawPeak = Math.max(rawPeak, Math.abs(acc[i]));
+  const rawWarn = rawPeak < 0.01
+    ? ` ⚠️ peak mic=${rawPeak.toFixed(4)} (gần như im lặng — mic có bắt được tiếng không? ` +
+      `kiểm tra đã nói đủ to / đúng mic chưa)`
+    : ` (peak mic=${rawPeak.toFixed(3)})`;
+  setStatus(mixStatus, `đã ghi ${recordedSec}s${rawWarn} — bấm Trích xuất để lấy kết quả cuối`,
+    rawPeak < 0.01 ? "warn" : "good");
 });
 
 document.getElementById("extractBtn").addEventListener("click", async () => {
