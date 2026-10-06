@@ -216,22 +216,58 @@ function linearResampleTo16k(float32, sourceRate) {
 
 // ---------- reference enrollment ----------
 
+// Matches resemblyzer's normalize_volume(wav, -30, increase_only=True) exactly -- the
+// encoder was trained on audio normalized to this loudness, so skipping it (v1's original
+// bug) feeds mel energies the LSTM never saw in training, degrading the embedding badly
+// for any recording that isn't already close to that level.
+function normalizeVolumeResemblyzer(f32, targetDbfs = -30) {
+  const int16Max = 32767;
+  let sumSq = 0;
+  for (let i = 0; i < f32.length; i++) {
+    const v = f32[i] * int16Max;
+    sumSq += v * v;
+  }
+  const rms = Math.sqrt(sumSq / f32.length) || 1e-8;
+  const currentDbfs = 20 * Math.log10(rms / int16Max);
+  const change = targetDbfs - currentDbfs;
+  if (change < 0) return f32; // increase_only: never attenuate already-loud audio
+  const gain = Math.pow(10, change / 20);
+  const out = new Float32Array(f32.length);
+  for (let i = 0; i < f32.length; i++) out[i] = f32[i] * gain;
+  return out;
+}
+
+// Poor-man's VAD: resemblyzer trims silence before picking windows, so taking a blind
+// "first N seconds" window (v1's other bug) can land on lead-in silence and produce a
+// near-meaningless embedding. Slide instead and keep the highest-energy window.
+function pickHighestEnergyWindow(f32, winLen) {
+  if (f32.length <= winLen) return f32;
+  const step = Math.max(1, Math.floor(SR * 0.2));
+  let bestStart = 0, bestEnergy = -1;
+  for (let start = 0; start + winLen <= f32.length; start += step) {
+    let sumSq = 0;
+    for (let i = start; i < start + winLen; i++) sumSq += f32[i] * f32[i];
+    if (sumSq > bestEnergy) { bestEnergy = sumSq; bestStart = start; }
+  }
+  return f32.subarray(bestStart, bestStart + winLen);
+}
+
 async function enrollFromFloat32(float32) {
-  // Play back exactly what was captured -- BEFORE pad/trim to EMB_LEN, so what you hear is
-  // the real recording, not a silence-padded or cropped version of it.
+  // Play back exactly what was captured -- BEFORE any processing, so what you hear is
+  // the real recording, not a silence-padded/windowed/normalized version of it.
   const refAudioEl = document.getElementById("refAudio");
   refAudioEl.src = URL.createObjectURL(encodeWav(float32, SR));
   refAudioEl.style.display = "block";
 
-  const input = padOrTrim(float32, EMB_LEN);
+  const windowed = pickHighestEnergyWindow(float32, EMB_LEN);
+  const normalized = normalizeVolumeResemblyzer(windowed);
+  const input = padOrTrim(normalized, EMB_LEN);
   const tensor = new ort.Tensor("float32", input, [1, EMB_LEN]);
   const result = await ortSessionEmb.run({ waveform: tensor });
   referenceEmbedding = result.embedding.data; // Float32Array(256)
   const note = float32.length < EMB_LEN
     ? `ngắn hơn ${(EMB_LEN/SR).toFixed(2)}s, đã đệm 0 cho đủ`
-    : float32.length > EMB_LEN
-      ? `dài hơn ${(EMB_LEN/SR).toFixed(2)}s, chỉ dùng ${(EMB_LEN/SR).toFixed(2)}s đầu để enroll`
-      : "ok";
+    : `đã chọn ${(EMB_LEN/SR).toFixed(2)}s năng lượng cao nhất trong đoạn ghi để enroll`;
   setStatus(refStatus, `đã enroll (${note}) — nghe lại bên dưới`, "good");
   document.getElementById("mixStartBtn").disabled = false;
   setStatus(mixStatus, "sẵn sàng ghi mixture", "");
@@ -470,14 +506,26 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
     const out = await runTseOnWindow(mono16k);
     const trimmed = out.subarray(0, Math.min(mono16k.length, TSE_LEN));
 
-    const wavBlob = encodeWav(trimmed, SR);
+    let peak = 0;
+    for (let i = 0; i < trimmed.length; i++) peak = Math.max(peak, Math.abs(trimmed[i]));
+
+    // The model's raw output is NOT bounded to [-1,1] (measured peaks of 3-4+ on real audio)
+    // -- encodeWav's hard clamp was silently clipping ~4% of samples on every extraction.
+    // Peak-normalize instead of clipping, so what you hear matches the actual separation
+    // instead of a clipped/distorted version of it.
+    let toEncode = trimmed;
+    if (peak > 1.0) {
+      const gain = 0.97 / peak;
+      toEncode = new Float32Array(trimmed.length);
+      for (let i = 0; i < trimmed.length; i++) toEncode[i] = trimmed[i] * gain;
+    }
+
+    const wavBlob = encodeWav(toEncode, SR);
     const url = URL.createObjectURL(wavBlob);
     const audioEl = document.getElementById("extractAudio");
     audioEl.src = url;
     audioEl.style.display = "block";
 
-    let peak = 0;
-    for (let i = 0; i < trimmed.length; i++) peak = Math.max(peak, Math.abs(trimmed[i]));
     const quiet = peak < 0.02;
     const peakNote = quiet
       ? ` — ⚠️ peak=${peak.toFixed(4)} (rất nhỏ: model gần như không thấy giọng mục tiêu trong` +
