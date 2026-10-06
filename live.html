@@ -98,6 +98,7 @@
       <input id="refFileInput" type="file" accept="audio/*" />
     </div>
     <div id="refStatus" class="status">chưa có reference</div>
+    <audio id="refAudio" controls style="display:none"></audio>
   </div>
 
   <div class="card">
@@ -214,11 +215,22 @@ function linearResampleTo16k(float32, sourceRate) {
 // ---------- reference enrollment ----------
 
 async function enrollFromFloat32(float32) {
+  // Play back exactly what was captured -- BEFORE pad/trim to EMB_LEN, so what you hear is
+  // the real recording, not a silence-padded or cropped version of it.
+  const refAudioEl = document.getElementById("refAudio");
+  refAudioEl.src = URL.createObjectURL(encodeWav(float32, SR));
+  refAudioEl.style.display = "block";
+
   const input = padOrTrim(float32, EMB_LEN);
   const tensor = new ort.Tensor("float32", input, [1, EMB_LEN]);
   const result = await ortSessionEmb.run({ waveform: tensor });
   referenceEmbedding = result.embedding.data; // Float32Array(256)
-  setStatus(refStatus, `đã enroll (${float32.length / SR < EMB_LEN / SR ? "đệm 0 cho đủ " + (EMB_LEN/SR).toFixed(2) + "s" : "ok"})`, "good");
+  const note = float32.length < EMB_LEN
+    ? `ngắn hơn ${(EMB_LEN/SR).toFixed(2)}s, đã đệm 0 cho đủ`
+    : float32.length > EMB_LEN
+      ? `dài hơn ${(EMB_LEN/SR).toFixed(2)}s, chỉ dùng ${(EMB_LEN/SR).toFixed(2)}s đầu để enroll`
+      : "ok";
+  setStatus(refStatus, `đã enroll (${note}) — nghe lại bên dưới`, "good");
   document.getElementById("mixStartBtn").disabled = false;
   setStatus(mixStatus, "sẵn sàng ghi mixture", "");
 }
@@ -435,18 +447,23 @@ document.getElementById("extractBtn").addEventListener("click", async () => {
     const acc = getAccumulatedFloat32();
     let mono16k = linearResampleTo16k(acc, mixNativeRate);
     const originalLen = mono16k.length;
+    let truncatedNote = "";
     if (mono16k.length > TSE_LEN) {
-      mono16k = mono16k.subarray(mono16k.length - TSE_LEN); // keep the LAST 6s
+      // Model has a fixed 6s input -- keep the FIRST 6s (what you meant to test), not the
+      // last, so "I recorded X seconds" lines up with "it processed from the start of X".
+      truncatedNote = ` (đã ghi ${(originalLen / SR).toFixed(2)}s, model chỉ xử lý được ` +
+        `${(TSE_LEN / SR).toFixed(0)}s đầu — phần sau bị cắt)`;
+      mono16k = mono16k.subarray(0, TSE_LEN);
     }
     const out = await runTseOnWindow(mono16k);
-    const trimmed = out.subarray(0, Math.min(originalLen, TSE_LEN));
+    const trimmed = out.subarray(0, Math.min(mono16k.length, TSE_LEN));
 
     const wavBlob = encodeWav(trimmed, SR);
     const url = URL.createObjectURL(wavBlob);
     const audioEl = document.getElementById("extractAudio");
     audioEl.src = url;
     audioEl.style.display = "block";
-    setStatus(extractStatus, `xong — ${(trimmed.length / SR).toFixed(2)}s`, "good");
+    setStatus(extractStatus, `xong — ${(trimmed.length / SR).toFixed(2)}s${truncatedNote}`, "good");
   } catch (err) {
     setStatus(extractStatus, "lỗi: " + err.message, "bad");
   }
