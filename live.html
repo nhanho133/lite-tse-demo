@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>LiteTSE — live demo</title>
+<meta name="description" content="Ghi mic reference + mixture, trích xuất giọng mục tiêu ngay trong trình duyệt (CPU-only, ONNX Runtime Web)." />
+<style>
+  :root {
+    --bg: #0b0d12; --panel: #151822; --panel-2: #1b1f2c; --border: #2a2f3d;
+    --text: #e8eaf0; --muted: #9aa3b5; --accent: #6ea8ff; --good: #5fd98a;
+    --bad: #ff8a8a; --warn: #e8c468; --mono: "SF Mono", Consolas, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f7fb; --panel: #fff; --panel-2: #f0f2f8; --border: #e1e4ee;
+      --text: #1b1f2c; --muted: #5b6475; --accent: #2a63d6; --good: #1f8f52;
+      --bad: #c23b3b; --warn: #8a6d1a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.55; padding: 0 16px 64px;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  header { padding: 40px 0 20px; }
+  h1 { font-size: 1.5rem; margin: 0 0 8px; }
+  .sub { color: var(--muted); font-size: 0.92rem; }
+  .sub a { color: var(--accent); }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 16px;
+    padding: 22px; margin-bottom: 20px;
+  }
+  .card h2 { font-size: 1rem; margin: 0 0 4px; }
+  .card .hint { color: var(--muted); font-size: 0.8rem; margin-bottom: 14px; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button {
+    font: inherit; font-size: 0.86rem; font-weight: 600; padding: 10px 16px;
+    border-radius: 10px; border: 1px solid var(--border); background: var(--panel-2);
+    color: var(--text); cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #06101f; }
+  button.danger { background: var(--bad); border-color: var(--bad); color: #210505; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button:not(:disabled):hover { filter: brightness(1.08); }
+  input[type="file"] { font-size: 0.8rem; color: var(--muted); }
+  .status { font-family: var(--mono); font-size: 0.78rem; color: var(--muted); margin-top: 10px; min-height: 1.2em; }
+  .status.good { color: var(--good); }
+  .status.bad { color: var(--bad); }
+  .status.warn { color: var(--warn); }
+  audio { width: 100%; margin-top: 10px; }
+  canvas {
+    width: 100%; height: 72px; display: block; border-radius: 8px;
+    background: var(--panel-2); margin-top: 8px;
+  }
+  .canvas-label { font-size: 0.72rem; color: var(--muted); font-family: var(--mono); margin-top: 10px; }
+  .note {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px; font-size: 0.8rem; color: var(--muted); margin-bottom: 20px;
+  }
+  .note b { color: var(--text); }
+  .badge {
+    display: inline-block; font-size: 0.68rem; font-family: var(--mono); padding: 2px 8px;
+    border-radius: 999px; border: 1px solid var(--border); color: var(--muted); margin-right: 6px;
+  }
+  .timer { font-family: var(--mono); font-size: 0.82rem; color: var(--muted); }
+  footer { color: var(--muted); font-size: 0.76rem; margin-top: 32px; border-top: 1px solid var(--border); padding-top: 18px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="badge">chạy hoàn toàn trong trình duyệt</span>
+    <span class="badge">CPU-only, ONNX Runtime Web</span>
+    <h1>LiteTSE — live demo</h1>
+    <p class="sub">
+      Không có server nào xử lý audio — model chạy ngay trên máy bạn qua WebAssembly.
+      Xem kết quả 4 case có sẵn tại <a href="index.html">trang showcase</a>.
+    </p>
+  </header>
+
+  <div class="note">
+    <b>v1, một vài giới hạn đã biết:</b> enrollment dùng 1 cửa sổ 1.6s duy nhất (không VAD-trim,
+    không trung bình nhiều cửa sổ như Resemblyzer gốc — vẫn verify cosine similarity 1.000 với
+    Resemblyzer trên cùng điều kiện). Mixture giới hạn tối đa <b>6 giây</b> mỗi lần trích xuất
+    (model export ở độ dài cố định để chạy được trên ONNX Runtime Web). Line "extraction" lúc
+    đang ghi là <b>preview</b>, chạy lại model mỗi ~1.5s trên đoạn gần nhất — kết quả cuối cùng
+    khi bấm Dừng mới chạy trên toàn bộ đoạn ghi.
+  </div>
+
+  <div class="card">
+    <h2>1. Reference</h2>
+    <div class="hint">Giọng mẫu sạch của người nói mục tiêu — ghi mic hoặc upload file (~2-5 giây là đủ).</div>
+    <div class="row">
+      <button id="refRecordBtn">🎙 Ghi mic (3s)</button>
+      <input id="refFileInput" type="file" accept="audio/*" />
+    </div>
+    <div id="refStatus" class="status">chưa có reference</div>
+  </div>
+
+  <div class="card">
+    <h2>2. Mixture</h2>
+    <div class="hint">Bấm Bắt đầu, nói/giữ trong môi trường nhiễu, bấm Dừng khi xong (tối đa 6 giây).</div>
+    <div class="row">
+      <button id="mixStartBtn" disabled>● Bắt đầu ghi</button>
+      <button id="mixStopBtn" class="danger" disabled>■ Dừng</button>
+      <span id="mixTimer" class="timer"></span>
+    </div>
+    <div class="canvas-label">Mixture (mic, real-time)</div>
+    <canvas id="mixCanvas" width="640" height="72"></canvas>
+    <div class="canvas-label">Extraction (preview, cập nhật mỗi ~1.5s trong lúc ghi)</div>
+    <canvas id="extCanvas" width="640" height="72"></canvas>
+    <div id="mixStatus" class="status">cần enroll reference trước</div>
+  </div>
+
+  <div class="card">
+    <h2>3. Extraction (kết quả cuối)</h2>
+    <div class="hint">Chạy lại model một lần trên toàn bộ đoạn mixture đã ghi, chất lượng tốt nhất.</div>
+    <div class="row">
+      <button id="extractBtn" class="primary" disabled>Trích xuất</button>
+    </div>
+    <div id="extractStatus" class="status"></div>
+    <audio id="extractAudio" controls style="display:none"></audio>
+  </div>
+
+  <footer>
+    Model: LiteTFGridNet (causal TF-GridNet, 4.67M tham số) + Resemblyzer speaker encoder,
+    cả hai export sang ONNX và verify khớp bản PyTorch gốc (sai số ~1e-7, cosine similarity
+    1.000 với embedding Resemblyzer thật). Mã nguồn & số liệu đầy đủ trong repo này.
+  </footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.min.js"></script>
+<script>
+const SR = 16000;
+const TSE_LEN = 96000;      // 6s @16kHz, fixed by the ONNX export
+const EMB_LEN = 25440;      // 1.59s @16kHz -> exactly 160 mel frames
+const PREVIEW_MS = 1500;
+
+let ortSessionTse = null;
+let ortSessionEmb = null;
+let referenceEmbedding = null; // Float32Array(256)
+
+const refStatus = document.getElementById("refStatus");
+const mixStatus = document.getElementById("mixStatus");
+const extractStatus = document.getElementById("extractStatus");
+
+function setStatus(el, text, cls) {
+  el.textContent = text;
+  el.className = "status" + (cls ? " " + cls : "");
+}
+
+async function loadModels() {
+  setStatus(refStatus, "đang tải model (~27MB)...", "warn");
+  ort.env.wasm.numThreads = Math.max(1, Math.min(4, navigator.hardwareConcurrency || 1));
+  const opts = { executionProviders: ["wasm"] };
+  [ortSessionTse, ortSessionEmb] = await Promise.all([
+    ort.InferenceSession.create("onnx/lite_tfgridnet.onnx", opts),
+    ort.InferenceSession.create("onnx/embedding.onnx", opts),
+  ]);
+  setStatus(refStatus, "model đã sẵn sàng — chưa có reference", "");
+  document.getElementById("mixStartBtn").disabled = false; // enabled once enrolled, see below
+}
+
+// ---------- audio helpers ----------
+
+function padOrTrim(f32, len) {
+  if (f32.length === len) return f32;
+  const out = new Float32Array(len);
+  out.set(f32.subarray(0, Math.min(len, f32.length)));
+  return out;
+}
+
+async function decodeToMono16k(arrayBuffer) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const decoded = await ctx.decodeAudioData(arrayBuffer);
+  const offline = new OfflineAudioContext(1, Math.ceil(decoded.duration * SR), SR);
+  const src = offline.createBufferSource();
+  src.buffer = decoded;
+  src.connect(offline.destination);
+  src.start();
+  const rendered = await offline.startRendering();
+  ctx.close();
+  return rendered.getChannelData(0).slice();
+}
+
+function linearResampleTo16k(float32, sourceRate) {
+  if (sourceRate === SR) return float32;
+  const ratio = SR / sourceRate;
+  const outLen = Math.round(float32.length * ratio);
+  const out = new Float32Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    const srcPos = i / ratio;
+    const i0 = Math.floor(srcPos);
+    const frac = srcPos - i0;
+    const s0 = float32[i0] || 0;
+    const s1 = float32[i0 + 1] || s0;
+    out[i] = s0 + (s1 - s0) * frac;
+  }
+  return out;
+}
+
+// ---------- reference enrollment ----------
+
+async function enrollFromFloat32(float32) {
+  const input = padOrTrim(float32, EMB_LEN);
+  const tensor = new ort.Tensor("float32", input, [1, EMB_LEN]);
+  const result = await ortSessionEmb.run({ waveform: tensor });
+  referenceEmbedding = result.embedding.data; // Float32Array(256)
+  setStatus(refStatus, `đã enroll (${float32.length / SR < EMB_LEN / SR ? "đệm 0 cho đủ " + (EMB_LEN/SR).toFixed(2) + "s" : "ok"})`, "good");
+  document.getElementById("mixStartBtn").disabled = false;
+  setStatus(mixStatus, "sẵn sàng ghi mixture", "");
+}
+
+document.getElementById("refFileInput").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  try {
+    setStatus(refStatus, "đang xử lý file...", "warn");
+    const buf = await file.arrayBuffer();
+    const mono16k = await decodeToMono16k(buf);
+    await enrollFromFloat32(mono16k);
+  } catch (err) {
+    setStatus(refStatus, "lỗi: " + err.message, "bad");
+  }
+});
+
+document.getElementById("refRecordBtn").addEventListener("click", async () => {
+  try {
+    setStatus(refStatus, "xin quyền mic...", "warn");
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const recorder = new MediaRecorder(stream);
+    const chunks = [];
+    recorder.ondataavailable = (e) => chunks.push(e.data);
+    recorder.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      try {
+        setStatus(refStatus, "đang xử lý...", "warn");
+        const blob = new Blob(chunks);
+        const buf = await blob.arrayBuffer();
+        const mono16k = await decodeToMono16k(buf);
+        await enrollFromFloat32(mono16k);
+      } catch (err) {
+        setStatus(refStatus, "lỗi: " + err.message, "bad");
+      }
+    };
+    recorder.start();
+    setStatus(refStatus, "đang ghi 3 giây...", "warn");
+    setTimeout(() => recorder.stop(), 3000);
+  } catch (err) {
+    setStatus(refStatus, "không mở được mic: " + err.message, "bad");
+  }
+});
+
+// ---------- mixture recording + live visualization ----------
+
+const mixCanvas = document.getElementById("mixCanvas");
+const extCanvas = document.getElementById("extCanvas");
+const mixCtx2d = mixCanvas.getContext("2d");
+const extCtx2d = extCanvas.getContext("2d");
+
+function drawBars(ctx2d, canvas, magnitudes, color) {
+  const w = canvas.width, h = canvas.height;
+  ctx2d.clearRect(0, 0, w, h);
+  ctx2d.fillStyle = color;
+  const n = magnitudes.length;
+  const barW = w / n;
+  for (let i = 0; i < n; i++) {
+    const v = magnitudes[i]; // 0..1
+    const barH = Math.max(1, v * h);
+    ctx2d.fillRect(i * barW, h - barH, Math.max(1, barW - 1), barH);
+  }
+}
+
+// Direct-DFT magnitude over a trailing window -- only needs ~48 bins for a bar display,
+// so a dense O(N*K) sum is plenty fast in JS without pulling in an FFT library.
+function dftMagnitudes(float32, nBins = 48, maxFreqBin = 400) {
+  const N = Math.min(float32.length, 2048);
+  const start = float32.length - N;
+  const mags = new Float32Array(nBins);
+  let maxMag = 1e-6;
+  for (let b = 0; b < nBins; b++) {
+    const k = 1 + Math.floor((b / nBins) * maxFreqBin);
+    let re = 0, im = 0;
+    for (let n = 0; n < N; n++) {
+      const x = float32[start + n];
+      const angle = (2 * Math.PI * k * n) / N;
+      re += x * Math.cos(angle);
+      im -= x * Math.sin(angle);
+    }
+    const mag = Math.sqrt(re * re + im * im) / N;
+    mags[b] = mag;
+    if (mag > maxMag) maxMag = mag;
+  }
+  for (let b = 0; b < nBins; b++) mags[b] = mags[b] / maxMag;
+  return mags;
+}
+
+let mixing = false;
+let mixAudioCtx = null;
+let mixAnalyser = null;
+let mixRecordedChunks = []; // Float32Array chunks at native rate
+let mixNativeRate = SR;
+let mixStartTime = 0;
+let mixPreviewTimer = null;
+let mixVizRAF = null;
+
+function getAccumulatedFloat32() {
+  let total = 0;
+  for (const c of mixRecordedChunks) total += c.length;
+  const out = new Float32Array(total);
+  let off = 0;
+  for (const c of mixRecordedChunks) { out.set(c, off); off += c.length; }
+  return out;
+}
+
+async function runTseOnWindow(mono16k) {
+  const input = padOrTrim(mono16k, TSE_LEN);
+  const mixTensor = new ort.Tensor("float32", input, [1, TSE_LEN]);
+  const embTensor = new ort.Tensor("float32", referenceEmbedding, [1, 256]);
+  const result = await ortSessionTse.run({ mixture: mixTensor, embedding: embTensor });
+  return result.separated.data; // Float32Array(TSE_LEN)
+}
+
+function vizLoop() {
+  if (!mixing) return;
+  const data = new Uint8Array(mixAnalyser.frequencyBinCount);
+  mixAnalyser.getByteFrequencyData(data);
+  const n = 48;
+  const step = Math.floor(data.length / n) || 1;
+  const bars = new Float32Array(n);
+  for (let i = 0; i < n; i++) bars[i] = data[i * step] / 255;
+  drawBars(mixCtx2d, mixCanvas, bars, "#6ea8ff");
+  mixVizRAF = requestAnimationFrame(vizLoop);
+}
+
+async function previewExtraction() {
+  if (!mixing || mixRecordedChunks.length === 0) return;
+  try {
+    const acc = getAccumulatedFloat32();
+    const mono16k = linearResampleTo16k(acc, mixNativeRate);
+    const trailing = mono16k.subarray(Math.max(0, mono16k.length - TSE_LEN));
+    const out = await runTseOnWindow(trailing);
+    const mags = dftMagnitudes(out);
+    drawBars(extCtx2d, extCanvas, mags, "#5fd98a");
+  } catch (err) {
+    // A preview failing mid-recording shouldn't stop the recording itself.
+    console.warn("preview failed:", err);
+  }
+}
+
+document.getElementById("mixStartBtn").addEventListener("click", async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mixAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    mixNativeRate = mixAudioCtx.sampleRate;
+    const source = mixAudioCtx.createMediaStreamSource(stream);
+
+    mixAnalyser = mixAudioCtx.createAnalyser();
+    mixAnalyser.fftSize = 256;
+    source.connect(mixAnalyser);
+
+    const processor = mixAudioCtx.createScriptProcessor(4096, 1, 1);
+    mixRecordedChunks = [];
+    processor.onaudioprocess = (e) => {
+      mixRecordedChunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    };
+    source.connect(processor);
+    processor.connect(mixAudioCtx.destination); // Safari requires a connected graph to pull data
+
+    mixAudioCtx._stream = stream;
+    mixAudioCtx._processor = processor;
+    mixAudioCtx._source = source;
+
+    mixing = true;
+    mixStartTime = performance.now();
+    document.getElementById("mixStartBtn").disabled = true;
+    document.getElementById("mixStopBtn").disabled = false;
+    document.getElementById("extractBtn").disabled = true;
+    setStatus(mixStatus, "đang ghi...", "warn");
+
+    vizLoop();
+    mixPreviewTimer = setInterval(previewExtraction, PREVIEW_MS);
+
+    const timerEl = document.getElementById("mixTimer");
+    const timerTick = setInterval(() => {
+      if (!mixing) { clearInterval(timerTick); return; }
+      const s = (performance.now() - mixStartTime) / 1000;
+      timerEl.textContent = s.toFixed(1) + "s" + (s > 6 ? "  (đã quá 6s, phần dư sẽ bị cắt)" : "");
+    }, 100);
+  } catch (err) {
+    setStatus(mixStatus, "không mở được mic: " + err.message, "bad");
+  }
+});
+
+document.getElementById("mixStopBtn").addEventListener("click", () => {
+  mixing = false;
+  if (mixVizRAF) cancelAnimationFrame(mixVizRAF);
+  if (mixPreviewTimer) clearInterval(mixPreviewTimer);
+  if (mixAudioCtx) {
+    mixAudioCtx._processor.disconnect();
+    mixAudioCtx._source.disconnect();
+    mixAudioCtx._stream.getTracks().forEach((t) => t.stop());
+    mixAudioCtx.close();
+  }
+  document.getElementById("mixStartBtn").disabled = false;
+  document.getElementById("mixStopBtn").disabled = true;
+  document.getElementById("extractBtn").disabled = false;
+  const recordedSec = (getAccumulatedFloat32().length / mixNativeRate).toFixed(2);
+  setStatus(mixStatus, `đã ghi ${recordedSec}s — bấm Trích xuất để lấy kết quả cuối`, "good");
+});
+
+document.getElementById("extractBtn").addEventListener("click", async () => {
+  try {
+    setStatus(extractStatus, "đang trích xuất (chạy toàn bộ đoạn ghi)...", "warn");
+    const acc = getAccumulatedFloat32();
+    let mono16k = linearResampleTo16k(acc, mixNativeRate);
+    const originalLen = mono16k.length;
+    if (mono16k.length > TSE_LEN) {
+      mono16k = mono16k.subarray(mono16k.length - TSE_LEN); // keep the LAST 6s
+    }
+    const out = await runTseOnWindow(mono16k);
+    const trimmed = out.subarray(0, Math.min(originalLen, TSE_LEN));
+
+    const wavBlob = encodeWav(trimmed, SR);
+    const url = URL.createObjectURL(wavBlob);
+    const audioEl = document.getElementById("extractAudio");
+    audioEl.src = url;
+    audioEl.style.display = "block";
+    setStatus(extractStatus, `xong — ${(trimmed.length / SR).toFixed(2)}s`, "good");
+  } catch (err) {
+    setStatus(extractStatus, "lỗi: " + err.message, "bad");
+  }
+});
+
+function encodeWav(float32, sampleRate) {
+  const buffer = new ArrayBuffer(44 + float32.length * 2);
+  const view = new DataView(buffer);
+  const writeStr = (off, str) => { for (let i = 0; i < str.length; i++) view.setUint8(off + i, str.charCodeAt(i)); };
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + float32.length * 2, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, "data");
+  view.setUint32(40, float32.length * 2, true);
+  let off = 44;
+  for (let i = 0; i < float32.length; i++) {
+    const s = Math.max(-1, Math.min(1, float32[i]));
+    view.setInt16(off, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    off += 2;
+  }
+  return new Blob([buffer], { type: "audio/wav" });
+}
+
+loadModels().catch((err) => setStatus(refStatus, "lỗi tải model: " + err.message, "bad"));
+</script>
+</body>
+</html>

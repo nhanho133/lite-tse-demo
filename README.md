@@ -1,6 +1,34 @@
 # LiteTSE demo
 
-Live demo: https://nhanho133.github.io/lite-tse-demo/
+Showcase (4 case có sẵn): https://nhanho133.github.io/lite-tse-demo/
+Live demo (ghi mic + trích xuất ngay trong trình duyệt): https://nhanho133.github.io/lite-tse-demo/live.html
+
+## Live demo — chạy hoàn toàn trong trình duyệt, không server
+
+`live.html` export cả 2 model sang ONNX và chạy qua ONNX Runtime Web (WASM, CPU-only):
+
+- **LiteTFGridNet** (model TSE chính) — độ dài cố định 96000 mẫu (6 giây @16kHz), vì ONNX cần
+  shape tĩnh. Wrapper thay `torch.stft`/`torch.istft` (complex tensor, ONNX không hỗ trợ) bằng
+  Conv1d/ConvTranspose1d dùng basis cos/sin precompute — verify khớp bản gốc sai số ~3.5e-6.
+- **Resemblyzer speaker encoder** — mel-spectrogram (Conv1d, khớp
+  `librosa.feature.melspectrogram` sai số ~1e-15) + LSTM/Linear gốc của Resemblyzer, gộp chung
+  1 graph ONNX nên browser chỉ cần feed raw waveform, không cần tự viết FFT/DSP bằng JS. v1 chỉ
+  dùng 1 cửa sổ 1.6s (không VAD-trim, không trung bình nhiều cửa sổ như bản gốc) — verify cosine
+  similarity 1.000 với Resemblyzer thật trên cùng điều kiện.
+
+Cả 2 export script nằm ngoài repo này (không public) — numeric verification (PyTorch vs ONNX
+Runtime, max abs diff) chạy trước khi export, không chỉ "export xong là xong".
+
+**Giới hạn đã biết của v1** (chưa test được trên browser thật — môi trường này không có
+trình duyệt để verify tương tác):
+- Mixture tối đa 6 giây/lần trích xuất; ghi lâu hơn chỉ giữ lại 6 giây cuối.
+- `ScriptProcessorNode` (deprecated nhưng vẫn được hỗ trợ rộng) dùng cho capture mic, chưa chuyển
+  sang `AudioWorkletNode`.
+- Resample mic→16kHz bằng linear interpolation đơn giản, không qua `OfflineAudioContext` (khác
+  với đường upload file, vốn dùng `OfflineAudioContext` chính xác hơn).
+- Enrollment v1 là xấp xỉ (xem trên), không phải pipeline đầy đủ của Resemblyzer.
+
+---
 
 Phát audio thật từ 4 case tách giọng mục tiêu (target speaker extraction) bằng
 [LiteTSE](https://github.com/nhanho133) — mixture nhiễu, output sau TSE, và groundtruth sạch,
